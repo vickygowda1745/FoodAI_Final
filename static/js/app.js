@@ -4,14 +4,12 @@ let currentImageBase64 = null;
 let userCoords = { latitude: null, longitude: null };
 let currentScanData = null;
 
-// Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     checkHealth();
+    // Auto-fetch GPS on page load for instant location availability
+    autoFetchGPS();
 });
 
-/**
- * Health check endpoint ping
- */
 async function checkHealth() {
     const statusElem = document.getElementById('ai-status');
     const statusText = document.getElementById('ai-status-text');
@@ -21,7 +19,7 @@ async function checkHealth() {
         if (response.ok) {
             statusElem.classList.remove('offline');
             statusElem.classList.add('online');
-            statusText.textContent = 'Ollama Ready';
+            statusText.textContent = 'AI Vision Ready';
         } else {
             throw new Error('Health check failed');
         }
@@ -33,7 +31,26 @@ async function checkHealth() {
 }
 
 /**
- * Resilient Camera Initialization with Multi-Stage Fallbacks
+ * High-accuracy automatic GPS grab
+ */
+function autoFetchGPS() {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            userCoords.latitude = position.coords.latitude;
+            userCoords.longitude = position.coords.longitude;
+            const statusText = document.getElementById('gps-coords-text');
+            if (statusText) {
+                statusText.textContent = `${userCoords.latitude.toFixed(4)}, ${userCoords.longitude.toFixed(4)}`;
+            }
+        },
+        (err) => console.warn('Auto GPS pending permission or user action'),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+}
+
+/**
+ * Camera Toggle with mobile fallback constraints
  */
 async function camera() {
     const video = document.getElementById('webcam');
@@ -42,7 +59,6 @@ async function camera() {
     const btnLabel = document.getElementById('camera-btn-label');
 
     if (mediaStream) {
-        // Stop stream
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
         video.classList.add('hidden');
@@ -52,26 +68,24 @@ async function camera() {
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert('Camera access is not supported by this browser. Please use Chrome or Safari over HTTPS.');
+        alert('Camera access is not supported on this browser/protocol.');
         return;
     }
 
-    // Try back camera first, then soft back camera, then default video feed
     const cameraConstraints = [
-        { video: { facingMode: { exact: "environment" } }, audio: false },
+        { video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
         { video: { facingMode: "environment" }, audio: false },
         { video: true, audio: false }
     ];
 
     let streamObtained = false;
-
     for (const constraints of cameraConstraints) {
         try {
             mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
             streamObtained = true;
             break;
         } catch (e) {
-            console.warn('Camera constraint attempt failed, trying fallback...', e);
+            console.warn('Camera mode retry...', e);
         }
     }
 
@@ -83,13 +97,10 @@ async function camera() {
         btnLabel.textContent = 'Stop Camera';
         currentImageBase64 = null;
     } else {
-        alert('Unable to access camera. Please check browser camera permissions in your phone settings.');
+        alert('Unable to access phone camera. Check browser permissions.');
     }
 }
 
-/**
- * File upload handler
- */
 function handleFileSelect(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -97,14 +108,11 @@ function handleFileSelect(event) {
     const reader = new FileReader();
     reader.onload = function (e) {
         currentImageBase64 = e.target.result;
-
-        // Hide video if active
         if (mediaStream) {
             mediaStream.getTracks().forEach(track => track.stop());
             mediaStream = null;
             document.getElementById('camera-btn-label').textContent = 'Toggle Camera';
         }
-
         const video = document.getElementById('webcam');
         const preview = document.getElementById('image-preview');
         const placeholder = document.getElementById('camera-placeholder');
@@ -117,42 +125,28 @@ function handleFileSelect(event) {
     reader.readAsDataURL(file);
 }
 
-/**
- * Request GPS permission, capture coordinates, and search nearby restaurants
- */
 function gps() {
     const statusText = document.getElementById('gps-coords-text');
-
     if (!navigator.geolocation) {
-        alert('Geolocation is not supported by your browser.');
-        statusText.textContent = 'GPS Unsupported';
+        alert('Geolocation unsupported.');
         return;
     }
-
-    statusText.textContent = 'Requesting GPS...';
-
+    statusText.textContent = 'Fetching GPS...';
     navigator.geolocation.getCurrentPosition(
         (position) => {
             userCoords.latitude = position.coords.latitude;
             userCoords.longitude = position.coords.longitude;
-
             statusText.textContent = `${userCoords.latitude.toFixed(4)}, ${userCoords.longitude.toFixed(4)}`;
-
-            // Call restaurant API with coordinates
             restaurants(userCoords.latitude, userCoords.longitude);
         },
         (error) => {
-            console.error('GPS error:', error);
-            statusText.textContent = 'GPS Permission Denied';
-            alert('Unable to retrieve location. Please allow browser location access.');
+            statusText.textContent = 'GPS Denied';
+            alert('Enable location permission in browser settings.');
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
 }
 
-/**
- * Call restaurants API and display cards
- */
 async function restaurants(lat, lng) {
     const loader = document.getElementById('restaurant-loader');
     const emptyMsg = document.getElementById('restaurant-empty');
@@ -169,13 +163,11 @@ async function restaurants(lat, lng) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ latitude: lat, longitude: lng })
         });
-
         const data = await response.json();
         loader.classList.add('hidden');
 
         if (data.status === 'success' && data.restaurants && data.restaurants.length > 0) {
             grid.classList.remove('hidden');
-
             data.restaurants.forEach(rest => {
                 const card = document.createElement('div');
                 card.className = 'restaurant-card';
@@ -190,37 +182,36 @@ async function restaurants(lat, lng) {
                 grid.appendChild(card);
             });
         } else {
-            emptyMsg.innerHTML = `<p>${data.message || 'No restaurants found within 15 km.'}</p>`;
+            emptyMsg.innerHTML = `<p>${data.message || 'No restaurants found nearby.'}</p>`;
             emptyMsg.classList.remove('hidden');
         }
     } catch (err) {
         loader.classList.add('hidden');
-        emptyMsg.innerHTML = `<p>Error fetching restaurants: ${err.message}</p>`;
+        emptyMsg.innerHTML = `<p>Error fetching restaurants.</p>`;
         emptyMsg.classList.remove('hidden');
     }
 }
 
-/**
- * Trigger Food AI Scan
- */
 async function scan() {
     let payloadImage = null;
 
     if (currentImageBase64) {
         payloadImage = currentImageBase64;
     } else if (mediaStream) {
-        // Capture frame from webcam canvas
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('snapshot-canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        payloadImage = canvas.toDataURL('image/jpeg', 0.85);
+        payloadImage = canvas.toDataURL('image/jpeg', 0.90);
     } else {
-        alert('Please start camera or upload an image before scanning.');
+        alert('Please start camera or upload a photo first.');
         return;
     }
+
+    // Refresh GPS coordinates right before scanning
+    autoFetchGPS();
 
     const overlay = document.getElementById('scan-overlay');
     overlay.classList.remove('hidden');
@@ -245,10 +236,9 @@ async function scan() {
             timeStyle: 'short'
         });
 
-        // Store full scan data
         currentScanData = {
             food: result.food || 'Unknown Food',
-            confidence: result.confidence || '90%',
+            confidence: result.confidence || '92%',
             cuisine: result.cuisine || 'International',
             nutrition: result.nutrition || {},
             latitude: userCoords.latitude,
@@ -256,21 +246,15 @@ async function scan() {
             timestamp: timestamp
         };
 
-        // Render UI
         renderResults(currentScanData);
-
-        // Notify Telegram automatically
         notify(currentScanData);
 
     } catch (err) {
         overlay.classList.add('hidden');
-        alert('Scan request failed: ' + err.message);
+        alert('Scan failed: ' + err.message);
     }
 }
 
-/**
- * Render Scan & Nutrition Results to DOM
- */
 function renderResults(data) {
     document.getElementById('results-placeholder').classList.add('hidden');
     document.getElementById('results-content').classList.remove('hidden');
@@ -287,17 +271,11 @@ function renderResults(data) {
     document.getElementById('nut-fiber').textContent = nut.fiber || 'N/A';
 }
 
-/**
- * Send full notification payload to Telegram backend
- */
 async function notify(dataPayload) {
     const telegramBadge = document.getElementById('telegram-status');
     const payload = dataPayload || currentScanData;
 
-    if (!payload) {
-        console.warn('No active scan data to send to Telegram');
-        return;
-    }
+    if (!payload) return;
 
     telegramBadge.className = 'badge badge-muted';
     telegramBadge.textContent = 'Sending Telegram...';
@@ -320,13 +298,9 @@ async function notify(dataPayload) {
     } catch (err) {
         telegramBadge.className = 'badge';
         telegramBadge.textContent = 'Telegram Error';
-        console.error('Telegram dispatch error:', err);
     }
 }
 
-/**
- * Utility helper to prevent XSS string injections
- */
 function escapeHtml(str) {
     if (!str) return '';
     return String(str)
