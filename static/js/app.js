@@ -33,7 +33,7 @@ async function checkHealth() {
 }
 
 /**
- * Camera initialization and controls
+ * Resilient Camera Initialization with Multi-Stage Fallbacks
  */
 async function camera() {
     const video = document.getElementById('webcam');
@@ -47,24 +47,43 @@ async function camera() {
         mediaStream = null;
         video.classList.add('hidden');
         placeholder.classList.remove('hidden');
-        btnLabel.textContent = 'Start Camera';
+        btnLabel.textContent = 'Toggle Camera';
         return;
     }
 
-    try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: false
-        });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Camera access is not supported by this browser. Please use Chrome or Safari over HTTPS.');
+        return;
+    }
 
+    // Try back camera first, then soft back camera, then default video feed
+    const cameraConstraints = [
+        { video: { facingMode: { exact: "environment" } }, audio: false },
+        { video: { facingMode: "environment" }, audio: false },
+        { video: true, audio: false }
+    ];
+
+    let streamObtained = false;
+
+    for (const constraints of cameraConstraints) {
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+            streamObtained = true;
+            break;
+        } catch (e) {
+            console.warn('Camera constraint attempt failed, trying fallback...', e);
+        }
+    }
+
+    if (streamObtained && mediaStream) {
         video.srcObject = mediaStream;
         video.classList.remove('hidden');
         preview.classList.add('hidden');
         placeholder.classList.add('hidden');
         btnLabel.textContent = 'Stop Camera';
         currentImageBase64 = null;
-    } catch (err) {
-        alert('Camera access denied or unavailable: ' + err.message);
+    } else {
+        alert('Unable to access camera. Please check browser camera permissions in your phone settings.');
     }
 }
 
@@ -83,7 +102,7 @@ function handleFileSelect(event) {
         if (mediaStream) {
             mediaStream.getTracks().forEach(track => track.stop());
             mediaStream = null;
-            document.getElementById('camera-btn-label').textContent = 'Start Camera';
+            document.getElementById('camera-btn-label').textContent = 'Toggle Camera';
         }
 
         const video = document.getElementById('webcam');
